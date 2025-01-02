@@ -1,1 +1,12 @@
-build
+pico_sdk_version/build/*
+!pico_sdk_version/build/thermocam.uf2
+
+pico_circuitpython/_tmp_
+pico_circuitpython/firmware
+pico_circuitpython/settings.toml
+
+pico_micropython/firmware
+
+_tmp_
+
+images/*.pdf
