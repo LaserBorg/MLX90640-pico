@@ -14,9 +14,12 @@ FRAME_MARKER = b'\xAA\xAA'
 FRAME_SHAPE = (24, 32)
 NUM_PIXELS = FRAME_SHAPE[0] * FRAME_SHAPE[1]
 
-i2c = busio.I2C(board.GP17, board.GP16, frequency=1000000)
+SCL_pin = board.GP27
+SDA_pin = board.GP26
+
+i2c = busio.I2C(SCL_pin, SDA_pin, frequency=1000000)
 mlx = adafruit_mlx90640.MLX90640(i2c)
-mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_4_HZ
+mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_8_HZ
 frame = [0] * 768
 
 def read_sensor_data():  # async
