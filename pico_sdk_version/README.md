@@ -5,7 +5,8 @@ streams its images to a host PC instead of rendering them on an attached display
 
 ## Features
 
-- streams complete 32 x 24 temperature frames at up to 16 images per second
+- streams complete 32 x 24 temperature frames: 8 images per second by default,
+  up to 16
 - sends raw temperatures, so the host does the smoothing, scaling and colouring
 - two transports from a single code base:
   - **USB** (CDC) on every board
@@ -22,24 +23,27 @@ Rendering on the device was by far the most expensive part of the original
 project: a 128 x 128 RGB565 display frame is 32 KB, i.e. about **740 KB/s** at
 23 fps, all of it over SPI.
 
-The sensor data itself is tiny: a frame is 32 x 24 = 768 values. Sending them as
-16 bit floats costs
+The sensor data itself is tiny: a frame is 32 x 24 = 768 values, and the
+default setting sends 8 of them per second. Sending them as 16 bit floats costs
 
-| format            | per frame | at 32 Hz |
-| ----------------- | --------- | -------- |
-| float16 (default) | 1 552 B   | 50 KB/s  |
-| float32           | 3 088 B   | 99 KB/s  |
+| format            | per frame | at 8 images/s | at 16 images/s |
+| ----------------- | --------- | ------------- | -------------- |
+| float16 (default) | 1 552 B   | 12 KB/s       | 25 KB/s        |
+| float32           | 3 088 B   | 25 KB/s       | 49 KB/s        |
 
-50 KB/s (about 400 kbit/s) is trivial for both USB CDC and WiFi, which is why
+25 KB/s (about 200 kbit/s) is trivial for both USB CDC and WiFi, which is why
 this works without a display, without a second core, and without any compression.
 
 ### Why float16 is enough
 
-An MLX90640 has a noise level of roughly ±1 °C, and the emissivity and ambient
-temperature calibration that the host still has to apply are worth several
-degrees. The precision of a 16 bit float (~0.25 °C at typical room temperatures)
-is far below all of that, so it is free accuracy-wise while halving the payload.
-The frame minimum and maximum are sent as float32 so the displayed range is exact.
+An MLX90640-BAA has a noise level of 0.14 K RMS at 1 Hz (see
+[Framerate](#framerate)), and the emissivity and ambient temperature calibration
+that the host still has to apply are worth several degrees. Half precision
+quantises these temperatures in steps of 0.016 °C at room temperature, rising to
+0.25 °C at the sensor's 300 °C maximum, so it is far below the sensor's own noise
+at every temperature it can measure — free accuracy-wise, while halving the
+payload. The frame minimum and maximum are sent as float32 so the displayed
+range is exact.
 
 ## Hardware
 
@@ -182,6 +186,122 @@ The port can be changed at build time with `-DSTREAM_WIFI_PORT=...`.
 The viewer's keys, its command line options and how it renders the image are
 documented in [`../receiver/README.md`](../receiver/README.md).
 
+## Framerate
+
+The MLX90640 has a 3 bit refresh rate field, so there are exactly eight rates.
+The sensor measures one *subpage* per interval, and a complete 32 x 24 image
+takes two subpages, so the image rate is always half the refresh rate:
+
+| refresh rate | new subpage every | complete images per second |
+| ------------ | ----------------- | -------------------------- |
+| 0.5 Hz       | 2 s               | 0.25                       |
+| 1 Hz         | 1 s               | 0.5                        |
+| 2 Hz         | 500 ms            | 1                          |
+| 4 Hz         | 250 ms            | 2                          |
+| 8 Hz         | 125 ms            | 4                          |
+| 16 Hz        | 62.5 ms           | 8                          |
+| 32 Hz        | 31.25 ms          | 16                         |
+| 64 Hz        | 15.6 ms           | 32                         |
+
+### Noise
+
+The datasheet specifies the noise at a **1 Hz refresh rate** as NETD (Noise
+Equivalent Temperature Difference), in table 14:
+
+| device        | average | min | standard deviation |
+| ------------- | ------- | --- | ------------------ |
+| MLX90640-BAA  | 0.14 K  | 0.1 K | 0.05 K           |
+| MLX90640-BAB  | 0.25 K  | 0.2 K | 0.05 K           |
+
+The BAA is the 110° x 75° version and the BAB the 55° x 35° one, so the wider
+lens is the quieter of the two. The datasheet also shows the noise varying over
+the frame (figures 20 to 23): because of the lens, pixels in the corners are
+noisier than those in the middle, and noise rises at low temperatures and falls
+at high ones.
+
+Note that the underlying thermopile noise is fixed; what changes with the
+refresh rate is how long each measurement integrates. Longer integration averages
+more of that noise away, which is why the specification quotes the rate
+explicitly. Treat the figures above as the 1 Hz reference point rather than as
+what you will see at 32 Hz.
+
+### Resolution
+
+Control register 1 has a separate 2 bit field selecting the ADC resolution:
+16, 17, 18 or 19 bit. The datasheet (section 12.3) states only that "increasing
+the resolution decreases the quantization noise and improves the overall noise
+performance" — more bits is strictly better for noise, with no stated cost in
+frame rate or timing.
+
+The default is 18 bit, which is also what the device is calibrated at. Changing
+it requires the VDD correction described in section 11.2.2.1; the Melexis driver
+in this repository handles that in `MLX90640_GetVdd`.
+
+### The rate and resolution pairing
+
+Changing the resolution does not change how often a subpage is measured, but the
+ADC needs longer to convert at the higher settings, and drivers in the wild agree
+on one pairing in which each extra bit doubles the integration time:
+
+| refresh rate | integration time | maximum resolution |
+| ------------ | ---------------- | ------------------ |
+| 0.5 Hz       | 64 ms            | 19 bit             |
+| 1 Hz         | 32 ms            | 19 bit             |
+| 2 Hz         | 16 ms            | 19 bit             |
+| 4 Hz         | 8 ms             | 19 bit             |
+| 8 Hz         | 4 ms             | 19 bit             |
+| 16 Hz        | 2 ms             | 18 bit             |
+| 32 Hz        | 1 ms             | 17 bit             |
+| 64 Hz        | 0.5 ms           | 16 bit             |
+
+Written as a formula, the integration time is `32 / refresh rate` milliseconds.
+The table is self-consistent: 16 bit needs 0.5 ms and 19 bit needs 4 ms, and 2^3
+= 8 times the integration time buys exactly the 3 extra bits. Stay inside it, and
+always take the highest resolution the chosen rate allows.
+
+This constraint is **not stated in the datasheet** — do not go looking for it
+there. The datasheet lists the eight rates and the four resolutions as
+independent register fields, with no table relating them. The pairing above is
+the convention the Melexis, Pimoroni and Adafruit drivers follow, it is
+consistent with the fact that a device only needs to finish one subpage per
+interval, and it is the safe choice. If you want to deviate, measure it: the
+sensor is documented to misbehave rather than to report an error.
+
+### Choosing a setting
+
+This firmware defaults to **18 bit at 16 Hz**: 8 complete images per second,
+with twice the integration time of the previous 32 Hz default.
+
+| refresh rate | resolution | image rate | integration time |
+| ------------ | ---------- | ---------- | ---------------- |
+| 32 Hz        | 17 bit     | 16 /s      | 1 ms             |
+| 16 Hz        | 18 bit     | 8 /s       | 2 ms             |
+| 8 Hz         | 19 bit     | 4 /s       | 4 ms             |
+| 2 Hz         | 19 bit     | 1 /s       | 16 ms            |
+
+Change `RESOLUTION` and `REFRESH_RATE` in `main.cpp` and rebuild. Lowering the
+frame rate is a better way to reduce noise than averaging frames on the host,
+because a longer integration time captures more signal in every frame, whereas
+host-side averaging (`--temporal` in the viewer) buys the same reduction by
+smearing motion across frames. The two combine.
+
+Two other things follow from the table:
+
+- **At 32 Hz the I2C bus is already the limit.** A 1 MHz bus manages about 32
+  reads per second, i.e. 16 complete images, which is exactly what 32 Hz yields,
+  so that setting has no headroom left. Lower rates relieve the bus as well.
+- **Half of the bandwidth is untouched by any of this.** The payload is 1 552
+  bytes per image either way, so 8 images per second is about 12 KB/s rather
+  than 25 KB/s.
+
+### Where pedantry is due
+
+The eight refresh rates and their register encoding are from the datasheet
+(table "Control register 1", section 10.4), as is the 1 Hz NETD table above and
+the statement that the datasheet's own noise figures are given at 1 Hz. The
+integration time column is the documented convention rather than a datasheet
+specification — see the warning above.
+
 ## Why the image needs two readings
 
 The MLX90640 delivers each 32 x 24 image in two interleaved halves, called
@@ -193,22 +313,8 @@ half left over from the previous frame, which is visible as a chequerboard that
 flips with every frame. The firmware instead takes two readings, one per
 subpage, and converts each one with the compensation data that was captured
 alongside it. A complete image therefore costs two readings, which is why the
-image rate is half the sensor's refresh rate (32 Hz refresh gives 16 images per
-second).
-
-The resolution and refresh rate must also form a valid pair — the sensor
-silently misbehaves otherwise:
-
-| resolution | maximum refresh rate |
-| ---------- | -------------------- |
-| 16 bit     | 64 Hz                |
-| 17 bit     | 32 Hz                |
-| 18 bit     | 16 Hz                |
-| 19 bit     | 8 Hz                 |
-
-The firmware defaults to 17 bit at 32 Hz, which yields 16 complete images per
-second and is the fastest a full image can be obtained. Change `RESOLUTION` and
-`REFRESH_RATE` in `main.cpp` to trade image rate for lower noise.
+image rate is half the sensor's refresh rate — see
+[Framerate](#framerate).
 
 ## The frame protocol
 

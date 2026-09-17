@@ -72,24 +72,35 @@ extern "C" {
 // two subpages therefore needs two reads, which is what MLX90640_GetFrameData_
 // and the merge below do.
 //
-// RESOLUTION and REFRESH_RATE must form a valid pair - the sensor silently
-// misbehaves otherwise (see the MLX90640 datasheet):
+// RESOLUTION and REFRESH_RATE select the ADC resolution (control register 1
+// bits 10..11) and how often a new subpage is measured (bits 7..9). The
+// datasheet lists all eight rates but does not tabulate them against the four
+// resolutions; it only states, in section 12.3, that raising the resolution
+// lowers the quantisation noise and so improves the overall noise performance.
 //
-//   resolution   maximum refresh rate
-//   16 bit       64 Hz
-//   17 bit       32 Hz
-//   18 bit       16 Hz
-//   19 bit        8 Hz
+// Drivers in the wild agree on one pairing, in which each extra ADC bit doubles
+// the integration time, i.e. integration time = 32 / refresh rate milliseconds:
 //
-// 18 bit at 16 Hz is a good compromise: at the 32 Hz refresh rate a full
-// 32 x 24 image only arrives 16 times per second anyway, so the higher ADC
-// resolution costs nothing in effective frame rate but noticeably reduces noise.
+//   refresh rate   integration time   maximum resolution
+//    0.5 Hz          64 ms             19 bit
+//      1 Hz          32 ms             19 bit
+//      2 Hz          16 ms             19 bit
+//      4 Hz           8 ms             19 bit
+//      8 Hz           4 ms             19 bit
+//     16 Hz           2 ms             18 bit
+//     32 Hz           1 ms             17 bit
+//     64 Hz         0.5 ms             16 bit
 //
-// Note that a complete image needs two readings (one per subpage), so the image
-// rate is half the refresh rate. 17 bit at 32 Hz therefore gives 16 images per
-// second, which is the fastest a complete 32 x 24 image can be obtained.
-constexpr uint8_t RESOLUTION = 1;               // 0: 16 bit, 1: 17 bit, 2: 18 bit, 3: 19 bit
-constexpr uint8_t REFRESH_RATE = 6;             // 0: 0.5 Hz, 1: 1 Hz, 2: 2 Hz, 3: 4 Hz, 4: 8 Hz, 5: 16 Hz, 6: 32 Hz, 7: 64 Hz
+// Stay inside that pairing, and take the highest resolution the chosen rate
+// allows - the extra bits are strictly a noise improvement, never a cost.
+//
+// 18 bit at 16 Hz is the default: the sensor's noise is specified at 1 Hz
+// (datasheet table 14), so lowering the rate from the previous 32 Hz buys a
+// longer integration time, and 8 complete images per second is still a live
+// view. A complete image needs two readings (one per subpage), so the image
+// rate is half the refresh rate.
+constexpr uint8_t RESOLUTION = 2;               // 0: 16 bit, 1: 17 bit, 2: 18 bit, 3: 19 bit
+constexpr uint8_t REFRESH_RATE = 5;             // 0: 0.5 Hz, 1: 1 Hz, 2: 2 Hz, 3: 4 Hz, 4: 8 Hz, 5: 16 Hz, 6: 32 Hz, 7: 64 Hz
 constexpr float EMISSIVITY = 0.95;              // the emissivity of the measured object (1.0 = black body)
 constexpr float OPENAIR_TA_SHIFT = -8.0;        // for a MLX90640 in the open air the shift is -8 deg Celsius
 

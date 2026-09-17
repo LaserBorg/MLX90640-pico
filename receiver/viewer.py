@@ -48,7 +48,9 @@ Keys
     r         reset statistics and the automatic range
 
 The colour scale reserves 62 pixels on the right. Values below are in degrees
-Celsius; the scale never covers less than 10 degrees unless --min-span says so.
+Celsius. The scale always covers at least the window given by --min-range
+(default 24 to 38 degrees), and never a narrower span than --min-span allows
+(default 10 degrees).
 """
 
 import argparse
@@ -262,7 +264,7 @@ def init_colormaps():
 # ---- rendering ----
 
 # Geometry of the temperature scale drawn to the right of the image.
-SCALE_BAR_WIDTH = 62         # total strip added to the right of the thermal image
+SCALE_BAR_WIDTH = 70         # total strip added to the right of the thermal image
 SCALE_BAR_MARGIN = 12        # vertical margin above and below the bar
 SCALE_BAR_THICKNESS = 14     # width of the gradient bar itself
 SCALE_TICKS = 5              # number of labelled ticks, including both ends
@@ -283,9 +285,16 @@ class Viewer:
             self.fixed_range = (args.range[0], args.range[1])
         # The colour scale is stretched over at least this many degrees. Without
         # a floor, a scene with a narrow temperature range would map sensor
-        # noise (about 1 degree per pixel) onto the full colour range and look
+        # noise (0.14 K RMS on a -BAA) onto the full colour range and look
         # extremely grainy.
         self.min_span = max(0.0, args.min_span)
+        # An absolute window the scale always covers, as opposed to min_span
+        # which only sets a width. This keeps the colours still from frame to
+        # frame whenever the scene sits inside the window, instead of the whole
+        # image shifting colour because one pixel moved.
+        self.min_range = None
+        if args.min_range and list(args.min_range) != [0.0, 0.0]:
+            self.min_range = (float(args.min_range[0]), float(args.min_range[1]))
         self.show_scale = not args.no_scale
         # The scene range is smoothed over time, otherwise a single noisy hot
         # pixel would re-scale the whole image from frame to frame. Kept
@@ -326,9 +335,9 @@ class Viewer:
         """Work out the temperature range to map onto the colour scale.
 
         A fixed range wins. Otherwise the range of the current frame is used,
-        but widened to at least min_span degrees and centred on the scene, so
-        that a nearly uniform view does not stretch its own noise across the
-        whole colour scale.
+        but widened so that it always covers min_range and spans at least
+        min_span degrees, so that a nearly uniform view does not stretch its own
+        noise across the whole colour scale.
         """
         if self.fixed_range:
             return self.fixed_range
@@ -344,8 +353,16 @@ class Viewer:
                                   previous_high + alpha * (maximum - previous_high))
 
         low, high = self._smooth_range
-        span = high - low
 
+        # Cover the minimum window first. It is an absolute floor on the scale
+        # rather than a fixed range, so a scene hotter or colder than the window
+        # still scales to its own range, and doing this before the span test
+        # below keeps the result as tight as it can be.
+        if self.min_range is not None:
+            low = min(low, self.min_range[0])
+            high = max(high, self.min_range[1])
+
+        span = high - low
         if self.min_span > 0 and span < self.min_span:
             centre = (low + high) / 2.0
             low = centre - self.min_span / 2.0
@@ -423,7 +440,12 @@ class Viewer:
             # A short tick mark, kept dim so it reads as part of the bar.
             cv2.line(strip, (bar_x + SCALE_BAR_THICKNESS, y), (bar_x + SCALE_BAR_THICKNESS + 3, y),
                      (140, 140, 140), 1)
-            label = f"{temperature:.0f}"
+            # One decimal for every tick. The range is usually fractional (the
+            # minimum window guarantees that), and rounding the intermediate
+            # ticks to whole degrees would print a number the tick does not
+            # stand for - 34.25 is not 34. Negative values keep their sign,
+            # which is all that is needed to tell them apart.
+            label = f"{temperature:.1f}"
             (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, thickness)
             text_y = max(text_h, min(height - 1, y + text_h // 2))
             if tick == SCALE_TICKS - 1:
@@ -561,16 +583,27 @@ def parse_args():
                         help="use a fixed temperature range instead of one per frame")
     parser.add_argument("-t", "--temporal", type=int, default=1, metavar="N",
                         help="average N frames to reduce sensor noise (default: 1, off). "
-                             "The MLX90640 has around 1 degree of noise per pixel, so 2-8 "
-                             "noticeably cleans the image at the cost of motion blur")
+                             "The MLX90640 has 0.14 K of noise per pixel (BAA, at 1 Hz), so "
+                             "2-8 noticeably cleans the image at the cost of motion blur")
     parser.add_argument("-m", "--min-span", type=float, default=10.0, metavar="DEGREES",
                         help="stretch the colour scale over at least this many degrees "
                              "(default: 10). Guards against a nearly uniform scene being "
                              "magnified into noise; too large a value wastes colour range "
                              "and washes the image out. Use 0 to always fit the scene exactly")
+    parser.add_argument("--min-range", type=float, nargs=2, default=(24.0, 38.0),
+                        metavar=("MIN", "MAX"),
+                        help="the colour scale always covers at least this window of "
+                             "temperatures (default: 24 38), so a scene cooler than MIN or "
+                             "hotter than MAX still scales to its own range. Unlike --range "
+                             "this is a floor, not a fixed range. Use 0 0 to cover only the "
+                             "scene range")
     parser.add_argument("--no-scale", action="store_true",
                         help="do not draw the temperature gradient scale")
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    if list(args.min_range) != [0.0, 0.0] and args.min_range[0] >= args.min_range[1]:
+        parser.error("--min-range MIN must be smaller than MAX (use 0 0 to disable)")
+    return args
 
 
 def main():

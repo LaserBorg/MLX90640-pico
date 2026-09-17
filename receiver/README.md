@@ -72,6 +72,7 @@ sudo usermod -aG dialout "$USER"
 | `--range MIN MAX` | fixed temperature range instead of one per frame                 |
 | `-t`, `--temporal N` | average N frames to reduce sensor noise (default: 1, off)     |
 | `-m`, `--min-span`| stretch the colour scale over at least this many degrees         |
+| `--min-range MIN MAX` | the colour scale always covers at least this window (default `24 38`) |
 | `--no-scale`      | do not draw the temperature gradient scale                       |
 
 `--device` and `--host` are mutually exclusive and one of them is required when
@@ -93,19 +94,28 @@ the display. The overlay reports both the scene's own range and the range the
 colours are actually mapped to, along with the frame rate and the number of
 frames the firmware had to drop.
 
-The colour scale covers at least 10 °C (`--min-span`, use `0` to always fit the
-scene exactly). This floor exists so that a nearly uniform scene is not
-magnified into noise, but keep it modest: too large a value wastes the ends of
-the colour ramp and a scene with real contrast then comes out flat. The widened
-range is centred on the scene, so nothing is clipped, and it is smoothed over
-time so a single noisy pixel cannot rescale the whole image.
+The colour scale always covers at least **24 to 38 °C** (`--min-range MIN MAX`,
+use `0 0` to cover only the scene). This is a floor, not a fixed range: a scene
+hotter than 38 °C or cooler than 24 °C still scales to its own range instead of
+being clipped. Within the window the colours stay put, which is what stops the
+whole image shifting colour just because one pixel moved.
+
+On top of that the scale never spans less than 10 °C (`--min-span`, use `0` to
+always fit the scene exactly). That floor exists so that a nearly uniform scene
+is not magnified into noise, but keep it modest: too large a value wastes the
+ends of the colour ramp and a scene with real contrast then comes out flat. Both
+widened ranges are centred on the scene, so nothing is clipped, and the range is
+smoothed over time so a single noisy pixel cannot rescale the whole image.
 
 The image is mirrored horizontally by default, because the MLX90640 reads its
 pixels out mirrored relative to the scene. Use `--no-flip-h` if that is not what
 you want.
 
-The MLX90640 has around 1 °C of noise per pixel, so `--temporal 2` to `8`
-noticeably cleans the image up at the cost of some motion blur.
+An MLX90640-BAA has 0.14 K RMS of noise at 1 Hz, and a -BAB 0.25 K (datasheet
+table 14, quoted at a 1 Hz refresh rate). `--temporal 2` to `8` noticeably cleans
+the image up at the cost of some motion blur; see
+[`../pico_sdk_version/README.md`](../pico_sdk_version/README.md#framerate) for
+the sensor-side alternative, which reduces noise without blurring motion.
 
 ## The frame protocol
 
