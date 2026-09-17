@@ -1,4 +1,8 @@
-pico_sdk_version/build/*
+.venv/
+__pycache__/
+*.pyc
+
+pico_sdk_version/build/
 !pico_sdk_version/build/thermocam.uf2
 
 pico_circuitpython/_tmp_

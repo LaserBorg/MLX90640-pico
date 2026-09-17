@@ -20,12 +20,20 @@ extern "C"{
 #include <MLX90640_I2C_Driver.h>
 }
 
-// configure the Thermopile MLX90640 on the I2C bus 0 (SCL: 17, SDA: 16)
+// configure the Thermopile MLX90640 on the I2C bus (SCL: 27, SDA: 26)
+//
+// GPIO 26 and 27 are on I2C1 (GPIO 16/17 would be I2C0), so the bus has to
+// match the pins. Override from the CMake command line if you wired the sensor
+// differently, e.g. -DPIN_I2C_SDA=16 -DPIN_I2C_SCL=17.
 
-#define PIN_I2C_SDA 16
-#define PIN_I2C_SCL 17
+#ifndef PIN_I2C_SDA
+#define PIN_I2C_SDA 26
+#endif
+#ifndef PIN_I2C_SCL
+#define PIN_I2C_SCL 27
+#endif
 
-#define I2C_PORT i2c0
+#define I2C_PORT i2c1
 
 
 void MLX90640_I2CInit() {
